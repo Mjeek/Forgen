@@ -1,0 +1,50 @@
+From: Forgen <dev@forgen.local>
+Subject: [PATCH 01/10] Register --forgen-profile and initialize ForgenConfig.
+
+Wires the new forgen:: target into the browser main runner so the config
+singleton is populated before any renderer is spawned.
+
+NOTE: line numbers are approximate; if upstream has moved, adjust the hunk
+context. The key anchor is `ContentMainRunnerImpl::Initialize` — call
+`forgen::ForgenConfig::Initialize()` right after command-line parsing and
+before any field trial / sandbox setup.
+
+---
+ BUILD.gn                            |  1 +
+ content/app/content_main_runner_impl.cc | 6 ++++++
+ 2 files changed, 7 insertions(+)
+
+diff --git a/BUILD.gn b/BUILD.gn
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -200,6 +200,7 @@ group("gn_all") {
+   deps = [
+     ":chrome",
+     "//content/shell:content_shell",
++    "//forgen",
+   ]
+ }
+
+diff --git a/content/app/content_main_runner_impl.cc b/content/app/content_main_runner_impl.cc
+--- a/content/app/content_main_runner_impl.cc
++++ b/content/app/content_main_runner_impl.cc
+@@ -40,6 +40,8 @@
+ #include "content/public/common/content_switches.h"
+ #include "content/public/common/main_function_params.h"
+
++#include "forgen/forgen_config.h"
++
+ namespace content {
+
+ int ContentMainRunnerImpl::Initialize(ContentMainParams params) {
+@@ -80,6 +82,10 @@ int ContentMainRunnerImpl::Initialize(ContentMainParams params) {
+   // (existing) Command-line parsing has happened in ContentMainDelegate::
+   // BasicStartupComplete by the time we get here.
+   base::CommandLine::Init(0, nullptr);
++
++  // Populate the Forgen per-profile singleton before any other subsystem
++  // reads fingerprint-relevant values.
++  forgen::ForgenConfig::Initialize();
++
+   return 0;
+ }

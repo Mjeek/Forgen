@@ -1,0 +1,14 @@
+node_modules
+dist
+release
+.vite
+*.log
+.DS_Store
+.env
+.env.local
+userdata/
+chromium/src/
+chromium/depot_tools/
+chromium/out/
+*.sqlite
+*.sqlite-journal

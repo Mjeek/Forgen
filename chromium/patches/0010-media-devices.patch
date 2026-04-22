@@ -1,0 +1,49 @@
+From: Forgen <dev@forgen.local>
+Subject: [PATCH 10/10] MediaDevices.enumerateDevices override.
+
+Replaces the device list returned to the page with a plausible, stable set
+seeded from the profile id. Detectors look at the exact deviceId strings
+and count of audio/video inputs, so we return a 1-mic / 1-speaker / 1-cam
+tuple whose ids are derived from the noise seed — stable per profile,
+different between profiles.
+
+---
+ third_party/blink/renderer/modules/mediastream/media_devices.cc | 23 +++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/third_party/blink/renderer/modules/mediastream/media_devices.cc b/third_party/blink/renderer/modules/mediastream/media_devices.cc
+--- a/third_party/blink/renderer/modules/mediastream/media_devices.cc
++++ b/third_party/blink/renderer/modules/mediastream/media_devices.cc
+@@ -9,11 +9,32 @@
+ #include "third_party/blink/renderer/modules/mediastream/media_device_info.h"
+ #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+
++#include "forgen/forgen_config.h"
++
+ namespace blink {
+
+ ScriptPromise MediaDevices::enumerateDevices(ScriptState* script_state,
+                                              ExceptionState& exception_state) {
++  if (forgen::ForgenConfig::IsActive()) {
++    const auto& fp = forgen::ForgenConfig::Get();
++    // Build a stable hex id from noise_seed for each device.
++    auto HexId = [&](const char* kind) {
++      char buf[32];
++      snprintf(buf, sizeof(buf), "%s%016llx", kind,
++               static_cast<unsigned long long>(fp.noise_seed));
++      return String::FromUTF8(buf);
++    };
++    HeapVector<Member<MediaDeviceInfo>> devices;
++    devices.push_back(MakeGarbageCollected<MediaDeviceInfo>(
++        HexId("mic"), "Default", "", "audioinput"));
++    devices.push_back(MakeGarbageCollected<MediaDeviceInfo>(
++        HexId("spk"), "Default", "", "audiooutput"));
++    devices.push_back(MakeGarbageCollected<MediaDeviceInfo>(
++        HexId("cam"), "HD Camera", "", "videoinput"));
++    auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
++    resolver->Resolve(devices);
++    return resolver->Promise();
++  }
++
+   // (existing upstream impl follows)
+ }

@@ -1,0 +1,12 @@
+# Forgen config singleton. Included by //content, //third_party/blink, and
+# anything that needs to consult per-profile fingerprint values.
+
+source_set("forgen") {
+  sources = [
+    "forgen_config.cc",
+    "forgen_config.h",
+  ]
+  deps = [
+    "//base",
+  ]
+}
