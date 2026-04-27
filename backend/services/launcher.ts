@@ -54,14 +54,14 @@ function getProxyById(id: string): Proxy | null {
   };
 }
 
-// Resolve a Vision-patched chrome.exe under %APPDATA%\Vision\browser\chrome.
-// Vision installs versioned folders (e.g. `147.21/chrome.exe`); pick the most
-// recently modified one that actually contains the binary.
-function resolveVisionChrome(): string | null {
-  if (process.platform !== "win32") return null;
-  const appData = process.env.APPDATA ?? path.join(os.homedir(), "AppData", "Roaming");
-  const root = path.join(appData, "Vision", "browser", "chrome");
+// Find chrome.exe inside a Vision-style root. Accepts either:
+//   <root>/chrome.exe                              (flat layout)
+//   <root>/<version>/chrome.exe                    (Vision's versioned layout)
+// When multiple version folders exist, the most recently modified one wins.
+function findVisionChromeIn(root: string): string | null {
   if (!fs.existsSync(root)) return null;
+  const flat = path.join(root, "chrome.exe");
+  if (fs.existsSync(flat)) return flat;
   const candidates = fs
     .readdirSync(root, { withFileTypes: true })
     .filter((e) => e.isDirectory())
@@ -77,12 +77,39 @@ function resolveVisionChrome(): string | null {
   return null;
 }
 
+// Vision chrome bundled with the Forgen project itself. In dev this is
+// `<repo>/chromium/vision/`; in a packaged build electron-builder ships the
+// folder under `process.resourcesPath/vision/` via extraResources.
+function resolveBundledVisionChrome(): string | null {
+  if (process.platform !== "win32") return null;
+  const roots: string[] = [];
+  if (app.isPackaged) {
+    roots.push(path.join(process.resourcesPath, "vision"));
+  } else {
+    roots.push(path.join(process.cwd(), "chromium", "vision"));
+  }
+  for (const root of roots) {
+    const exe = findVisionChromeIn(root);
+    if (exe) return exe;
+  }
+  return null;
+}
+
+// Vision chrome installed system-wide under %APPDATA%\Vision\browser\chrome.
+function resolveSystemVisionChrome(): string | null {
+  if (process.platform !== "win32") return null;
+  const appData = process.env.APPDATA ?? path.join(os.homedir(), "AppData", "Roaming");
+  return findVisionChromeIn(path.join(appData, "Vision", "browser", "chrome"));
+}
+
 // Location of the patched Chromium binary. Resolution order:
 //   1. FORGEN_CHROMIUM env override
 //   2. Forgen's own patched build under chromium/out/Release
-//   3. Vision's patched chrome under %APPDATA%\Vision\browser\chrome
-//   4. @puppeteer/browsers-downloaded Chromium under userData/chromium
-// When falling back to Vision (3), Vision's binary won't honor our
+//   3. Vision chrome bundled with the project (chromium/vision/ in dev,
+//      <resourcesPath>/vision/ when packaged)
+//   4. Vision chrome installed system-wide under %APPDATA%\Vision\browser\chrome
+//   5. @puppeteer/browsers-downloaded Chromium under userData/chromium
+// When falling back to Vision (3 or 4), Vision's binary won't honor our
 // --forgen-profile switch or the C++ overrides — fingerprinting comes from
 // the JS injection layer (backend/services/injection.ts) instead.
 export function resolveChromiumBinary(): string | null {
@@ -92,8 +119,11 @@ export function resolveChromiumBinary(): string | null {
   const patched = path.join(process.cwd(), "chromium", "out", "Release", "chrome.exe");
   if (fs.existsSync(patched)) return patched;
 
-  const vision = resolveVisionChrome();
-  if (vision) return vision;
+  const bundledVision = resolveBundledVisionChrome();
+  if (bundledVision) return bundledVision;
+
+  const systemVision = resolveSystemVisionChrome();
+  if (systemVision) return systemVision;
 
   const bundled = path.join(app.getPath("userData"), "chromium");
   if (!fs.existsSync(bundled)) return null;

@@ -87,22 +87,45 @@ rebases can resolve conflicts surgically rather than re-deriving everything.
 
 ## Using Vision's patched chrome instead
 
-If you have a Vision subscription and Vision installed, the launcher will
-pick up Vision's patched binary automatically from
-`%APPDATA%\Vision\browser\chrome\<version>\chrome.exe`. Resolution order in
-`backend/services/launcher.ts`:
+If you have a Vision subscription, you can point Forgen at Vision's binary
+in two ways:
+
+**Bundled with the project (recommended for self-contained builds).** Copy
+Vision's chrome folder from `%APPDATA%\Vision\browser\chrome\` into
+`chromium/vision/` in this repo. Either layout works:
+
+```
+chromium/vision/chrome.exe                  # flat
+chromium/vision/147.21/chrome.exe           # versioned (Vision's own layout)
+```
+
+When multiple version folders are present the newest one wins. The folder
+is gitignored (the binary is large and proprietary). It's also wired into
+electron-builder's `extraResources` in `package.json`, so `npm run package`
+ships it inside the installer at `<resources>/vision/`.
+
+**System install.** If Vision is installed normally, the launcher also
+falls back to `%APPDATA%\Vision\browser\chrome\<version>\chrome.exe`.
+
+Full resolution order in `backend/services/launcher.ts`:
 
 1. `FORGEN_CHROMIUM` environment variable
 2. Forgen's own patched build at `chromium/out/Release/chrome.exe`
-3. Vision's patched chrome under `%APPDATA%\Vision\browser\chrome\`
-   (newest version folder wins)
-4. `@puppeteer/browsers`-downloaded Chromium under `userData/chromium`
+3. Bundled Vision chrome (`chromium/vision/` in dev, `<resources>/vision/`
+   when packaged)
+4. System Vision chrome under `%APPDATA%\Vision\browser\chrome\`
+5. `@puppeteer/browsers`-downloaded Chromium under `userData/chromium`
 
 When Forgen runs on Vision's binary, Vision's chrome ignores our
 `--forgen-profile` switch and the C++ singleton in
 `0001-forgen-config-loader.patch` does not load. Fingerprint overrides come
 from the JS injection layer in `backend/services/injection.ts`. This works
 end-to-end but is weaker than running Forgen's own patched build.
+
+> **Redistribution note.** Vision's chrome.exe is proprietary. Bundling it
+> in an installer you distribute to other users is almost certainly a
+> Vision EULA violation. The bundled-folder path is intended for personal
+> or single-seat use where you already hold a Vision license.
 
 ## Why JS-layer injection exists too
 
