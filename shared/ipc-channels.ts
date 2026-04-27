@@ -50,6 +50,9 @@ export const IPC = {
     version: "app:version",
     openExternal: "app:openExternal",
     chooseFile: "app:chooseFile",
+    apiToken: "app:apiToken",
+    regenerateApiToken: "app:regenerateApiToken",
+    runningProfiles: "app:runningProfiles",
   },
 } as const;
 

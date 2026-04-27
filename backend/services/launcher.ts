@@ -1,16 +1,19 @@
 import path from "path";
 import fs from "fs";
 import os from "os";
+import net from "net";
 import { app } from "electron";
 import { spawn, ChildProcess } from "child_process";
 import { getProfile, updateProfile } from "./profile";
 import { getDb } from "../db";
-import type { FingerprintConfig, Profile, Proxy } from "../../shared/types";
+import type { FingerprintConfig, Profile, Proxy, ProxyKind } from "../../shared/types";
 import { buildInjectionScript } from "./injection";
 
 interface RunningInstance {
   profileId: string;
+  folderId: string;
   process: ChildProcess;
+  port: number;
   startedAt: number;
 }
 
@@ -26,10 +29,6 @@ function profileDataDir(profileId: string): string {
   const p = path.join(userDataRoot(), profileId);
   fs.mkdirSync(p, { recursive: true });
   return p;
-}
-
-function profileConfigPath(profileId: string): string {
-  return path.join(profileDataDir(profileId), "forgen-profile.json");
 }
 
 function getProxyById(id: string): Proxy | null {
@@ -54,53 +53,74 @@ function getProxyById(id: string): Proxy | null {
   };
 }
 
-// Location of the patched Chromium binary. In MVP we fall back to any
-// Chromium that the user points us at via FORGEN_CHROMIUM env var, or to
-// @puppeteer/browsers-downloaded Chromium under userData/chromium.
-export function resolveChromiumBinary(): string | null {
-  if (process.env.FORGEN_CHROMIUM && fs.existsSync(process.env.FORGEN_CHROMIUM)) {
-    return process.env.FORGEN_CHROMIUM;
-  }
-  const patched = path.join(process.cwd(), "chromium", "out", "Release", "chrome.exe");
-  if (fs.existsSync(patched)) return patched;
+// Vision chrome lives bundled in the project. In dev that's
+// `<repo>/chromium/vision/`; in a packaged build electron-builder ships the
+// folder under `<resourcesPath>/vision/` via extraResources. Layouts:
+//   <root>/chrome.exe                   (flat)
+//   <root>/<version>/chrome.exe         (Vision's versioned layout)
+// When multiple version folders are present, the most recently modified wins.
+function visionRoot(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "vision")
+    : path.join(process.cwd(), "chromium", "vision");
+}
 
-  const bundled = path.join(app.getPath("userData"), "chromium");
-  if (!fs.existsSync(bundled)) return null;
-  // Walk one level deep and pick chrome.exe (Windows) or chrome (others).
-  const exe = process.platform === "win32" ? "chrome.exe" : "chrome";
-  const stack = [bundled];
-  while (stack.length) {
-    const dir = stack.pop()!;
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) stack.push(full);
-      else if (entry.name === exe) return full;
-    }
+export function resolveChromiumBinary(): string | null {
+  if (process.platform !== "win32") return null;
+  const root = visionRoot();
+  if (!fs.existsSync(root)) return null;
+  const flat = path.join(root, "chrome.exe");
+  if (fs.existsSync(flat)) return flat;
+  const candidates = fs
+    .readdirSync(root, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => {
+      const dir = path.join(root, e.name);
+      return { dir, mtime: fs.statSync(dir).mtimeMs };
+    })
+    .sort((a, b) => b.mtime - a.mtime);
+  for (const c of candidates) {
+    const exe = path.join(c.dir, "chrome.exe");
+    if (fs.existsSync(exe)) return exe;
   }
   return null;
 }
 
-function buildProxyArg(proxy: Proxy | null): string[] {
+function pickFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.on("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const addr = srv.address();
+      if (!addr || typeof addr === "string") {
+        srv.close();
+        reject(new Error("Could not allocate free port"));
+        return;
+      }
+      const port = addr.port;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+export interface ProxyOverride {
+  kind: ProxyKind;
+  host: string;
+  port: number;
+  username?: string;
+  password?: string;
+}
+
+export interface LaunchOptions {
+  args?: string[];
+  proxyOverride?: ProxyOverride | null;
+}
+
+function buildProxyArg(proxy: Pick<Proxy, "kind" | "host" | "port"> | null): string[] {
   if (!proxy) return [];
   const scheme = proxy.kind === "socks5" ? "socks5" : "http";
   return [`--proxy-server=${scheme}://${proxy.host}:${proxy.port}`];
-}
-
-function writeProfileConfig(profile: Profile, proxy: Proxy | null): string {
-  const config = {
-    version: 1,
-    id: profile.id,
-    fingerprint: profile.fingerprint,
-    proxy: proxy
-      ? {
-          kind: proxy.kind, host: proxy.host, port: proxy.port,
-          username: proxy.username ?? null, password: proxy.password ?? null,
-        }
-      : null,
-  };
-  const file = profileConfigPath(profile.id);
-  fs.writeFileSync(file, JSON.stringify(config, null, 2), "utf8");
-  return file;
 }
 
 function writeInjectionScript(profile: Profile): string {
@@ -118,33 +138,50 @@ function fingerprintFlags(fp: FingerprintConfig): string[] {
   return flags;
 }
 
-export async function launchProfile(profileId: string): Promise<{ pid: number }> {
+export async function launchProfile(
+  profileId: string,
+  opts: LaunchOptions = {},
+): Promise<{ pid: number; port: number }> {
   if (running.has(profileId)) throw new Error("Profile already running");
 
   const profile = getProfile(profileId);
   if (!profile) throw new Error("Profile not found");
 
-  const proxy = profile.proxyId ? getProxyById(profile.proxyId) : null;
+  const proxy: Pick<Proxy, "kind" | "host" | "port" | "username" | "password"> | null =
+    opts.proxyOverride
+      ? {
+          kind: opts.proxyOverride.kind,
+          host: opts.proxyOverride.host,
+          port: opts.proxyOverride.port,
+          username: opts.proxyOverride.username,
+          password: opts.proxyOverride.password,
+        }
+      : profile.proxyId
+      ? getProxyById(profile.proxyId)
+      : null;
+
   const chromium = resolveChromiumBinary();
   if (!chromium) {
     throw new Error(
-      "Chromium binary not found. Either build the patched Chromium (see chromium/README.md) " +
-      "or set FORGEN_CHROMIUM to an existing chrome.exe.",
+      `Vision chrome not found. Copy Vision's chrome folder into ` +
+        `${visionRoot()} (either chrome.exe directly or a versioned subfolder ` +
+        `like 147.21/chrome.exe).`,
     );
   }
 
-  writeProfileConfig(profile, proxy);
   writeInjectionScript(profile);
+  const debugPort = await pickFreePort();
 
   const args = [
     `--user-data-dir=${profileDataDir(profile.id)}`,
-    `--forgen-profile=${profileConfigPath(profile.id)}`,
+    `--remote-debugging-port=${debugPort}`,
+    "--remote-debugging-address=127.0.0.1",
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-features=Translate",
-    "--enable-logging=stderr",
     ...buildProxyArg(proxy),
     ...fingerprintFlags(profile.fingerprint),
+    ...(opts.args ?? []),
     "about:blank",
   ];
 
@@ -153,12 +190,20 @@ export async function launchProfile(profileId: string): Promise<{ pid: number }>
     stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
-      FORGEN_PROFILE_CONFIG: profileConfigPath(profile.id),
-      TZ: profile.fingerprint.timezone === "auto" ? (process.env.TZ ?? "") : profile.fingerprint.timezone,
+      TZ:
+        profile.fingerprint.timezone === "auto"
+          ? process.env.TZ ?? ""
+          : profile.fingerprint.timezone,
     },
   });
 
-  running.set(profileId, { profileId, process: child, startedAt: Date.now() });
+  running.set(profileId, {
+    profileId,
+    folderId: profile.folderId,
+    process: child,
+    port: debugPort,
+    startedAt: Date.now(),
+  });
 
   child.on("exit", () => {
     const inst = running.get(profileId);
@@ -175,7 +220,7 @@ export async function launchProfile(profileId: string): Promise<{ pid: number }>
     }
   });
 
-  return { pid: child.pid ?? -1 };
+  return { pid: child.pid ?? -1, port: debugPort };
 }
 
 export function stopProfile(profileId: string): void {
@@ -192,6 +237,24 @@ export function isRunning(profileId: string): boolean {
   return running.has(profileId);
 }
 
-export function listRunning(): string[] {
-  return [...running.keys()];
+export interface RunningInfo {
+  folderId: string;
+  profileId: string;
+  port: number;
+  startedAt: number;
+}
+
+export function listRunning(): RunningInfo[] {
+  return [...running.values()].map((r) => ({
+    folderId: r.folderId,
+    profileId: r.profileId,
+    port: r.port,
+    startedAt: r.startedAt,
+  }));
+}
+
+export function getRunning(profileId: string): RunningInfo | null {
+  const r = running.get(profileId);
+  if (!r) return null;
+  return { folderId: r.folderId, profileId: r.profileId, port: r.port, startedAt: r.startedAt };
 }

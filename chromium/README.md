@@ -85,6 +85,37 @@ uses a numeric prefix so they apply in a deterministic order.
 Patches are kept **small and focused** — one concern per file — so upstream
 rebases can resolve conflicts surgically rather than re-deriving everything.
 
+## Using Vision's patched chrome
+
+Forgen's launcher only runs Vision's patched chrome — no other fallbacks.
+Copy Vision's chrome folder from `%APPDATA%\Vision\browser\chrome\` into
+`chromium/vision/` in this repo. Either layout works:
+
+```
+chromium/vision/chrome.exe                  # flat
+chromium/vision/147.21/chrome.exe           # versioned (Vision's own layout)
+```
+
+When multiple version folders are present the newest one wins. The folder
+is gitignored (the binary is large and proprietary) and is wired into
+electron-builder's `extraResources` in `package.json`, so `npm run package`
+ships it inside the installer at `<resources>/vision/`.
+
+In dev the launcher looks at `<repo>/chromium/vision/`; in a packaged build
+it looks at `<resourcesPath>/vision/`. If no `chrome.exe` is found there,
+`launchProfile` throws.
+
+When Forgen runs Vision's binary, Vision's chrome does not load Forgen's
+C++ patch config — fingerprint overrides come from the JS injection layer
+in `backend/services/injection.ts`, attached over CDP via the per-profile
+remote-debugging port (currently the script is written to disk;
+CDP-attach-on-launch is a follow-up).
+
+> **Redistribution note.** Vision's chrome.exe is proprietary. Bundling it
+> in an installer you distribute to other users is almost certainly a
+> Vision EULA violation. The bundled-folder path is intended for personal
+> or single-seat use where you already hold a Vision license.
+
 ## Why JS-layer injection exists too
 
 `backend/services/injection.ts` implements the same overrides in JS as a

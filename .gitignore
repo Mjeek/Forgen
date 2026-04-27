@@ -10,5 +10,6 @@ userdata/
 chromium/src/
 chromium/depot_tools/
 chromium/out/
+chromium/vision/
 *.sqlite
 *.sqlite-journal
