@@ -2,6 +2,7 @@ import { app, BrowserWindow, shell, ipcMain, dialog } from "electron";
 import path from "path";
 import { initDb } from "../backend/db";
 import { registerIpcHandlers } from "../backend/ipc";
+import { startApiServer, stopApiServer } from "../backend/services/api-server";
 import { IPC } from "../shared/ipc-channels";
 
 const isDev = !app.isPackaged;
@@ -44,6 +45,7 @@ async function bootstrap() {
   await app.whenReady();
   initDb();
   registerIpcHandlers();
+  startApiServer();
 
   // App-level IPC
   ipcMain.handle(IPC.app.version, () => app.getVersion());
@@ -65,6 +67,10 @@ async function bootstrap() {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", () => {
+  stopApiServer();
 });
 
 bootstrap();

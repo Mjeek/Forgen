@@ -8,6 +8,7 @@ import * as tag from "./services/tag";
 import * as status from "./services/status";
 import * as launcher from "./services/launcher";
 import { smartFingerprint } from "./services/fingerprint";
+import { getApiToken, regenerateApiToken } from "./services/api-token";
 
 // Small wrapper so every handler returns { ok, data } / { ok:false, error }
 // instead of throwing across the IPC boundary (preserves stack-free messages).
@@ -45,7 +46,9 @@ export function registerIpcHandlers(): void {
   handle(IPC.profile.update, (id: string, patch: Parameters<typeof profile.updateProfile>[1]) => profile.updateProfile(id, patch));
   handle(IPC.profile.delete, (id: string) => profile.deleteProfile(id));
   handle(IPC.profile.smart, (platform?: Parameters<typeof smartFingerprint>[0]) => smartFingerprint(platform));
-  handle(IPC.profile.launch, (id: string) => launcher.launchProfile(id));
+  handle(IPC.profile.launch, (id: string, opts?: launcher.LaunchOptions) =>
+    launcher.launchProfile(id, opts ?? {}),
+  );
   handle(IPC.profile.stop, (id: string) => launcher.stopProfile(id));
   handle(IPC.profile.bulk, (op: "delete" | "move" | "status", ids: string[], arg?: string | null) => {
     if (op === "delete") return profile.bulkDelete(ids);
@@ -68,6 +71,11 @@ export function registerIpcHandlers(): void {
   handle(IPC.tag.create, (input: Parameters<typeof tag.createTag>[0]) => tag.createTag(input));
   handle(IPC.tag.update, (id: string, patch: Parameters<typeof tag.updateTag>[1]) => tag.updateTag(id, patch));
   handle(IPC.tag.delete, (id: string) => tag.deleteTag(id));
+
+  // App
+  handle(IPC.app.apiToken, () => getApiToken());
+  handle(IPC.app.regenerateApiToken, () => regenerateApiToken());
+  handle(IPC.app.runningProfiles, () => launcher.listRunning());
 
   // Statuses
   handle(IPC.status.list, () => status.listStatuses());

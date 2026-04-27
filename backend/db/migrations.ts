@@ -75,6 +75,15 @@ const MIGRATIONS: { id: number; sql: string }[] = [
       CREATE INDEX IF NOT EXISTS idx_profiles_proxy ON profiles(proxy_id);
     `,
   },
+  {
+    id: 2,
+    sql: `
+      CREATE TABLE IF NOT EXISTS app_config (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

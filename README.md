@@ -35,20 +35,38 @@ npm run package
 
 Produces an NSIS installer under `release/`.
 
-## Chromium fork
+## Browser binary
 
 The Electron app is just the control panel. Every profile launches a
-separate **patched Chromium** binary with its own `--user-data-dir`, proxy
-and fingerprint config. Until you've built the fork, the launcher falls back
-to upstream Chromium + JS-layer fingerprint injection (works but weaker).
+separate Chromium binary with its own `--user-data-dir`, proxy and
+fingerprint config. Forgen ships against **Vision's patched chrome**:
+copy your Vision install's chrome folder (from
+`%APPDATA%\Vision\browser\chrome\`) into `chromium/vision/`. The launcher
+looks there and nowhere else.
 
-```bash
-npm run chromium:fetch    # 30–90 min, ~40 GB
-npm run chromium:patch    # seconds
-npm run chromium:build    # 2–8 hours first time
-```
+See [`chromium/README.md`](./chromium/README.md) for layout details and
+the patch set kept against upstream Chromium for reference.
 
-See [`chromium/README.md`](./chromium/README.md) for full details.
+## Vision-compatible local API
+
+Forgen exposes the same HTTP control surface as Vision so existing
+Puppeteer/Playwright/Selenium scripts work with only the `X-Token` swapped
+out. Bound to `127.0.0.1:3030` by default (override with `FORGEN_API_PORT`
+if Vision is also running).
+
+| Method | Path                                  | Returns                                          |
+|--------|---------------------------------------|--------------------------------------------------|
+| GET    | `/list`                               | `[{folder_id, profile_id, port}, ...]`           |
+| GET    | `/start/{folderId}/{profileId}`       | `{folder_id, profile_id, port}`                  |
+| POST   | `/start/{folderId}/{profileId}`       | `{folder_id, profile_id, port}` — body accepts `args`, `proxy` |
+| GET    | `/stop/{folderId}/{profileId}`        | `{message}`                                      |
+
+All requests require an `X-Token` header. The token is generated on first
+boot and stored in the local SQLite DB (`app_config.api_token`) — fetch or
+regenerate it from the Settings UI or via IPC. The `port` returned by
+`/start` is a Chrome remote-debugging port; connect with
+`puppeteer.connect({ browserURL: 'http://127.0.0.1:<port>' })` or
+`chromium.connectOverCDP('http://127.0.0.1:<port>')`.
 
 ## Layout
 
