@@ -85,6 +85,25 @@ uses a numeric prefix so they apply in a deterministic order.
 Patches are kept **small and focused** — one concern per file — so upstream
 rebases can resolve conflicts surgically rather than re-deriving everything.
 
+## Using Vision's patched chrome instead
+
+If you have a Vision subscription and Vision installed, the launcher will
+pick up Vision's patched binary automatically from
+`%APPDATA%\Vision\browser\chrome\<version>\chrome.exe`. Resolution order in
+`backend/services/launcher.ts`:
+
+1. `FORGEN_CHROMIUM` environment variable
+2. Forgen's own patched build at `chromium/out/Release/chrome.exe`
+3. Vision's patched chrome under `%APPDATA%\Vision\browser\chrome\`
+   (newest version folder wins)
+4. `@puppeteer/browsers`-downloaded Chromium under `userData/chromium`
+
+When Forgen runs on Vision's binary, Vision's chrome ignores our
+`--forgen-profile` switch and the C++ singleton in
+`0001-forgen-config-loader.patch` does not load. Fingerprint overrides come
+from the JS injection layer in `backend/services/injection.ts`. This works
+end-to-end but is weaker than running Forgen's own patched build.
+
 ## Why JS-layer injection exists too
 
 `backend/services/injection.ts` implements the same overrides in JS as a

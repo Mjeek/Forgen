@@ -54,15 +54,46 @@ function getProxyById(id: string): Proxy | null {
   };
 }
 
-// Location of the patched Chromium binary. In MVP we fall back to any
-// Chromium that the user points us at via FORGEN_CHROMIUM env var, or to
-// @puppeteer/browsers-downloaded Chromium under userData/chromium.
+// Resolve a Vision-patched chrome.exe under %APPDATA%\Vision\browser\chrome.
+// Vision installs versioned folders (e.g. `147.21/chrome.exe`); pick the most
+// recently modified one that actually contains the binary.
+function resolveVisionChrome(): string | null {
+  if (process.platform !== "win32") return null;
+  const appData = process.env.APPDATA ?? path.join(os.homedir(), "AppData", "Roaming");
+  const root = path.join(appData, "Vision", "browser", "chrome");
+  if (!fs.existsSync(root)) return null;
+  const candidates = fs
+    .readdirSync(root, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => {
+      const dir = path.join(root, e.name);
+      return { dir, mtime: fs.statSync(dir).mtimeMs };
+    })
+    .sort((a, b) => b.mtime - a.mtime);
+  for (const c of candidates) {
+    const exe = path.join(c.dir, "chrome.exe");
+    if (fs.existsSync(exe)) return exe;
+  }
+  return null;
+}
+
+// Location of the patched Chromium binary. Resolution order:
+//   1. FORGEN_CHROMIUM env override
+//   2. Forgen's own patched build under chromium/out/Release
+//   3. Vision's patched chrome under %APPDATA%\Vision\browser\chrome
+//   4. @puppeteer/browsers-downloaded Chromium under userData/chromium
+// When falling back to Vision (3), Vision's binary won't honor our
+// --forgen-profile switch or the C++ overrides — fingerprinting comes from
+// the JS injection layer (backend/services/injection.ts) instead.
 export function resolveChromiumBinary(): string | null {
   if (process.env.FORGEN_CHROMIUM && fs.existsSync(process.env.FORGEN_CHROMIUM)) {
     return process.env.FORGEN_CHROMIUM;
   }
   const patched = path.join(process.cwd(), "chromium", "out", "Release", "chrome.exe");
   if (fs.existsSync(patched)) return patched;
+
+  const vision = resolveVisionChrome();
+  if (vision) return vision;
 
   const bundled = path.join(app.getPath("userData"), "chromium");
   if (!fs.existsSync(bundled)) return null;
